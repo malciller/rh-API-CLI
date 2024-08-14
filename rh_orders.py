@@ -5,6 +5,7 @@ import logging
 import os
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
