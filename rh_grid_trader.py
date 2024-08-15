@@ -139,7 +139,8 @@ class GridTrader:
             return
 
         lower_bound = current_price - 1500
-        upper_bound = current_price + 1500
+        #Not currently used
+        #upper_bound = current_price + 1500
 
         # Place buys below the current price and track them
         for price in range(int(lower_bound), int(current_price), int(self.grid_size)):

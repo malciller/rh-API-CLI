@@ -86,35 +86,57 @@ class ProfitCalculator:
 
 
 
-    def _calculate_unrealized_gains(self, buys_placed, buys_filled, sells_placed, current_price):
-        """Calculates unrealized gains based on total buy and sell orders, considering quantity."""
-        # Calculate the total cost of buys (placed + filled)
-        total_buy_cost = sum(buy['price'] * buy['quantity'] for buy in buys_placed) + \
-                        sum(buy['price'] * buy['quantity'] for buy in buys_filled)
+    def _calculate_unrealized_gains(self, buys_placed, buys_filled, sells_placed, sells_filled):
+        """Calculates unrealized gains based on outstanding buy and sell orders."""
 
-        # Calculate the total value of sells (placed)
-        total_sell_value = sum(sell['price'] * sell['quantity'] for sell in sells_placed)
-        
-        # Calculate unrealized gains as the difference
-        unrealized_gains = total_sell_value - total_buy_cost
-        
+        # Calculate Buy Cost: Sum the (price * quantity) of buy_placed.json orders
+        total_buy_cost = sum(buy['price'] * buy['quantity'] for buy in buys_placed)
+
+        # Subtract Buy Cost: Subtract (price * quantity) of buy_filled.json orders matching IDs in buy_placed.json
+        for buy in buys_filled:
+            if buy['order_id'] in {buy['order_id'] for buy in buys_placed}:
+                total_buy_cost -= buy['price'] * buy['quantity']
+
+        # Calculate Sell Cost: Sum the (price * quantity) of sell_placed.json orders
+        total_sell_cost = sum(sell['price'] * sell['quantity'] for sell in sells_placed)
+
+        # Subtract Sell Cost: Subtract (price * quantity) of sell_filled.json orders matching IDs in sell_placed.json
+        for sell in sells_filled:
+            if sell['order_id'] in {sell['order_id'] for sell in sells_placed}:
+                total_sell_cost -= sell['price'] * sell['quantity']
+
+        # Ensure buy_cost is negative or zero
+        if total_buy_cost > 0:
+            total_buy_cost = -total_buy_cost
+
+        # Calculate Total Unrealized Cost
+        unrealized_gains = total_buy_cost + total_sell_cost
+
         return unrealized_gains
+
 
 
 
     def _calculate_realized_gains(self, buys, sells):
         """Calculates realized gains based on filled orders."""
-        realized_gains = 0.0
+        # Calculate Buy Cost: Sum the (quantity * price) of all buy_filled.json orders
+        total_buy_cost = sum(buy['price'] * buy['quantity'] for buy in buys)
+        #print(f"total buy cost: {total_buy_cost}\n")
+        
+        # Calculate Sell Cost: Sum the (quantity * price) of all sell_filled.json orders
+        total_sell_cost = sum(sell['price'] * sell['quantity'] for sell in sells)
+        #print(f"total sell cost: {total_sell_cost}\n")
+        
+        # Ensure buy_cost is negative or zero
+        if total_buy_cost > 0:
+            total_buy_cost = -total_buy_cost
 
-        # Process buy_filled.json data
-        for buy in buys:
-            realized_gains -= 1  # Subtract $1 for each buy order
-
-        # Process sell_filled.json data
-        for sell in sells:
-            realized_gains += float(sell['price'])  # Add the sale price for each sell order
+        # Calculate Realized Gain: Buy cost + Sell cost
+        realized_gains = total_buy_cost + total_sell_cost
 
         return realized_gains
+
+
 
 
 
@@ -124,8 +146,9 @@ class ProfitCalculator:
         buys_placed = self._read_json_file(self.buy_placed_file)
         buys_filled = self._read_json_file(self.buy_filled_file)
         sells_placed = self._read_json_file(self.sell_placed_file)
+        sells_filled = self._read_json_file(self.sell_filled_file)  # Added this line to read sell_filled.json
 
-        if not buys_placed and not buys_filled and not sells_placed:
+        if not buys_placed and not buys_filled and not sells_placed and not sells_filled:
             logging.info("No buy or sell data found.")
             return
 
@@ -134,8 +157,9 @@ class ProfitCalculator:
             logging.error("Failed to retrieve current price.")
             return
 
-        unrealized_gains = self._calculate_unrealized_gains(buys_placed, buys_filled, sells_placed, current_price)
+        unrealized_gains = self._calculate_unrealized_gains(buys_placed, buys_filled, sells_placed, sells_filled)  # Pass sells_filled here
         logging.info(f"Unrealized Gains: ${unrealized_gains:.2f}")
+
 
     def display_realized_gains(self):
         """Displays realized gains based on filled orders."""
