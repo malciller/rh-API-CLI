@@ -1,7 +1,8 @@
 import json
 import logging
 from rh_orders import CryptoOrderFetcher
-from rh_grid_trader import GridTrader  # Import the GridTrader class
+from rh_grid_trader import GridTrader
+from decimal import Decimal, getcontext, ROUND_DOWN
 
 # Set up logging
 logging.basicConfig(
@@ -65,7 +66,7 @@ class ProfitCalculator:
                 logging.warning(f"Order {order['id']} has a price of 0. Skipping.")
                 continue
 
-            quantity = 1.0 / price  # Assuming $1 investment per buy order
+            quantity = quote_amount / price  # Corrected: Use actual quote_amount
 
             if order['side'] == 'buy' and order['id'] not in buy_filled_ids:
                 self._write_json_file(self.buy_filled_file, {
@@ -83,6 +84,7 @@ class ProfitCalculator:
                     'quantity': quantity,
                     'order_id': order.get('id')
                 })
+
 
 
 
@@ -117,16 +119,17 @@ class ProfitCalculator:
 
 
 
+    getcontext().prec = 28
+
     def _calculate_realized_gains(self, buys, sells):
-        """Calculates realized gains based on filled orders."""
-        # Calculate Buy Cost: Sum the (quantity * price) of all buy_filled.json orders
-        total_buy_cost = sum(buy['price'] * buy['quantity'] for buy in buys)
-        #print(f"total buy cost: {total_buy_cost}\n")
+        """Calculates realized gains based on filled orders with high precision."""
+        
+        # Convert prices and quantities to Decimal for precise calculations
+        total_buy_cost = sum(Decimal(str(buy['price'])) * Decimal(str(buy['quantity'])) for buy in buys)
         
         # Calculate Sell Cost: Sum the (quantity * price) of all sell_filled.json orders
-        total_sell_cost = sum(sell['price'] * sell['quantity'] for sell in sells)
-        #print(f"total sell cost: {total_sell_cost}\n")
-        
+        total_sell_cost = sum(Decimal(str(sell['price'])) * Decimal(str(sell['quantity'])) for sell in sells)
+
         # Ensure buy_cost is negative or zero
         if total_buy_cost > 0:
             total_buy_cost = -total_buy_cost
