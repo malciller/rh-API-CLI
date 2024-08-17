@@ -1,11 +1,11 @@
 import uuid
-import json
 import requests
 import base64
 import datetime
 import logging
-import argparse
 import os
+import time
+import argparse
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from decimal import Decimal, ROUND_DOWN
 
@@ -20,12 +20,14 @@ API_KEY = os.getenv('RH_API_KEY')
 BASE64_PRIVATE_KEY = os.getenv('RH_BASE64_PRIVATE_KEY')
 
 class GridTrader:
-    def __init__(self, grid_size, usd_position_size):
+    def __init__(self, grid_size, usd_position_size, poll_interval=60):
         self.grid_size = grid_size
         self.usd_position_size = usd_position_size
         self.api_key = API_KEY
         self.private_key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(BASE64_PRIVATE_KEY))
         self.base_url = "https://trading.robinhood.com"
+        self.open_orders = []  # In-memory structure to track open orders
+        self.poll_interval = poll_interval  # Interval to check for price updates
         logging.info(f"Initialized GridTrader: {grid_size=}, {usd_position_size=}")
 
     def round_to_decimal_places(self, value: float, places: int) -> float:
@@ -44,7 +46,7 @@ class GridTrader:
             "type": "limit",
             "symbol": "BTC-USD",
             "limit_order_config": {
-                "limit_price": str(self.round_to_decimal_places(price, 2)),  # Round price to 2 decimal places
+                "limit_price": str(self.round_to_decimal_places(price, 2)),
                 "time_in_force": "gtc"
             }
         }
@@ -52,7 +54,6 @@ class GridTrader:
         if side == "buy":
             body["limit_order_config"]["quote_amount"] = str(self.round_to_decimal_places(self.usd_position_size, 2))
         elif side == "sell":
-            # Ensure quantity is rounded to 8 decimal places
             body["limit_order_config"]["asset_quantity"] = str(self.round_asset_quantity(quantity))
 
         path = "/api/v1/crypto/trading/orders/"
@@ -64,11 +65,10 @@ class GridTrader:
             response.raise_for_status()
             order_response = response.json()
             logging.info(f"Order Response: {order_response}")
+            self.open_orders.append(order_response)
             return order_response
         except requests.RequestException as e:
             logging.error(f"Error placing order: {e}")
-            if response is not None:
-                logging.error(f"Response content: {response.text}")
             return {}
 
     def _get_current_timestamp(self) -> int:
@@ -109,69 +109,68 @@ class GridTrader:
             logging.error(f"'ask_inclusive_of_buy_spread' not found in response: {best_bid_ask}")
             return None
 
-    def log_filled_order(self, action: str, price: float, quantity: float, order_id: str):
-        log_entry = {
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "price": price,
-            "quantity": quantity,
-            "order_id": order_id
-        }
+    def update_order_statuses(self):
+        """Fetches and updates the status of open orders."""
+        for order in self.open_orders:
+            order_id = order['id']
+            status = self.get_order_status(order_id)
+            if status['state'] == 'filled':
+                self.open_orders.remove(order)
+                logging.info(f"Order {order_id} has been filled and removed from tracking.")
+            else:
+                logging.info(f"Order {order_id} status: {status['state']}")
 
-        log_file = 'buy_placed.json' if action == "buy" else 'sell_placed.json'
-
-        with open(log_file, 'a') as f:
-            f.write(json.dumps(log_entry) + '\n')
-        
-        logging.info(f"Logged filled order: {log_entry}")
-
-    def load_filled_orders(self, action: str):
-        """Load filled orders from the respective JSON file."""
-        file_name = 'buy_placed.json' if action == "buy" else 'sell_placed.json'
+    def get_order_status(self, order_id: str) -> dict:
+        path = f"/api/v1/crypto/trading/orders/{order_id}/"
+        headers = self.get_authorization_header("GET", path, "", self._get_current_timestamp())
+        url = self.base_url + path
         try:
-            with open(file_name, 'r') as f:
-                return [json.loads(line) for line in f]
-        except FileNotFoundError:
-            return []
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logging.error(f"Error fetching order status: {e}")
+            return {}
 
-    def grid_trading_strategy(self):
+    def dynamic_grid_trading_strategy(self):
         current_price = self.get_current_price()
         if current_price is None:
             return
 
         lower_bound = current_price - 1500
-        #Not currently used
-        #upper_bound = current_price + 1500
 
-        # Place buys below the current price and track them
+        # Place buys below the current price
         for price in range(int(lower_bound), int(current_price), int(self.grid_size)):
             buy_order = self.place_order("buy", price)
             if buy_order:
                 quantity_bought = self.usd_position_size / price
-                self.log_filled_order("buy", price, self.round_asset_quantity(quantity_bought), buy_order['id'])
+                logging.info(f"Placed buy order at ${price} for {quantity_bought} BTC.")
 
-        # Place corresponding sells based on previously filled buys
-        filled_buys = self.load_filled_orders("buy")
-        for buy in filled_buys:
-            buy_price = buy['price']
-            buy_quantity = buy['quantity']
-            sell_price = buy_price + 2 * (current_price - buy_price)  # Reflective scaling
-            sell_order = self.place_order("sell", sell_price, buy_quantity)
-            if sell_order:
-                self.log_filled_order("sell", sell_price, buy_quantity, sell_order['id'])
+        # Update and place corresponding sells for filled buys
+        self.update_order_statuses()
+        for order in self.open_orders:
+            if order['side'] == 'buy' and order['state'] == 'filled':
+                buy_price = float(order['limit_order_config']['limit_price'])
+                sell_price = buy_price + 2 * (current_price - buy_price)
+                self.place_order("sell", sell_price, float(order['limit_order_config']['asset_quantity']))
 
     def run(self):
         logging.info("Running Grid Trading Strategy")
-        self.grid_trading_strategy()
+        while True:
+            self.dynamic_grid_trading_strategy()
+            time.sleep(self.poll_interval)  # Wait before checking prices and placing orders again
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Grid Trading Bot')
     parser.add_argument('--grid-size', type=float, required=True, help='Grid size in USD')
     parser.add_argument('--usd-position-size', type=float, required=True, help='USD position size per trade')
+    parser.add_argument('--poll-interval', type=int, default=60, help='Time interval (in seconds) between strategy runs')
 
     args = parser.parse_args()
 
     trader = GridTrader(
         grid_size=args.grid_size,
-        usd_position_size=args.usd_position_size
+        usd_position_size=args.usd_position_size,
+        poll_interval=args.poll_interval
     )
     trader.run()

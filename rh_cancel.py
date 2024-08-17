@@ -63,9 +63,62 @@ class OrderCanceller:
                 break
 
             all_orders.extend(orders)
-            url = data.get('next')  # Handle pagination
+            logging.info(f"Fetched {len(orders)} orders. Total so far: {len(all_orders)}")
+
+            # Handle pagination
+            next_page = data.get('next')
+            if next_page:
+                url = next_page  # Use the URL provided by the API
+                logging.info(f"Fetching next page: {url}")
+            else:
+                logging.info("No more pages.")
+                url = None  # No more pages
 
         return all_orders
+
+    def get_open_orders(self) -> list:
+        """Fetch only open orders, handling pagination if necessary."""
+        path = "/api/v1/crypto/trading/orders/"
+        query_params = "?state=open"  # Filter for only open orders
+        headers = self.get_authorization_header("GET", path + query_params, "", self._get_current_timestamp())
+        url = self.base_url + path + query_params
+
+        open_orders = []
+        while url:
+            try:
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()  # Raise an exception for HTTP errors
+                data = response.json()
+            except requests.exceptions.HTTPError as http_err:
+                logging.error(f"HTTP error occurred: {http_err}")
+                break
+            except requests.exceptions.RequestException as req_err:
+                logging.error(f"Request error occurred: {req_err}")
+                break
+            except ValueError as json_err:
+                logging.error(f"JSON decoding error: {json_err}")
+                break
+
+            orders = data.get('results', [])
+            if not orders:
+                logging.info("No more open orders found.")
+                break
+
+            open_orders.extend(orders)
+            logging.info(f"Fetched {len(orders)} open orders. Total so far: {len(open_orders)}")
+
+            # Handle pagination
+            next_cursor = data.get('cursor')
+            if next_cursor:
+                url = self.base_url + path + f"?state=open&cursor={next_cursor}"
+                logging.info(f"Fetching next page: {url}")
+            else:
+                logging.info("No more pages.")
+                url = None  # No more pages
+
+        return open_orders
+
+
 
     def get_order_status(self, order_id: str) -> dict:
         """Retrieve the current status of an order by its ID."""
@@ -110,35 +163,28 @@ class OrderCanceller:
         return {}
 
 
-    def cancel_all_orders(self):
-        """Cancel all orders."""
-        all_orders = self.get_all_orders()
-        for order in all_orders:
+    def cancel_all_open_orders(self):
+        """Cancel all open orders."""
+        open_orders = self.get_open_orders()
+        for order in open_orders:
             order_id = order.get('id')
             if not order_id:
                 logging.warning("Order ID not found.")
                 continue
 
-            current_status = self.get_order_status(order_id)
-            if not current_status:
-                logging.warning(f"Could not retrieve status for order {order_id}.")
-                continue
-
-            status = current_status.get('state')
-            logging.info(f"Order {order_id} status: {status}")
-
-            if status == 'open':
-                logging.info(f"Cancelling order {order_id}...")
-                cancel_response = self.cancel_order(order_id)
-                if 'error' in cancel_response:
-                    logging.error(f"Cannot cancel order {order_id}: {cancel_response.get('error')}")
-                elif 'success' in cancel_response:
-                    logging.info(f"Order {order_id} successfully canceled. Response: {cancel_response.get('success')}")
-                else:
-                    logging.error(f"Unexpected response for order {order_id}: {cancel_response}")
+            logging.info(f"Cancelling order {order_id}...")
+            cancel_response = self.cancel_order(order_id)
+            if 'error' in cancel_response:
+                logging.error(f"Cannot cancel order {order_id}: {cancel_response.get('error')}")
+            elif 'success' in cancel_response:
+                logging.info(f"Order {order_id} successfully canceled. Response: {cancel_response.get('success')}")
             else:
-                logging.info(f"Skipping cancellation for order {order_id} - current status: {status}")
+                logging.error(f"Unexpected response for order {order_id}: {cancel_response}")
+
+
 
 if __name__ == "__main__":
     canceller = OrderCanceller()
-    canceller.cancel_all_orders()
+    
+    # Cancel all open orders
+    canceller.cancel_all_open_orders()

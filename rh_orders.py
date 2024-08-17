@@ -3,6 +3,7 @@ import base64
 import datetime
 import logging
 import os
+import argparse
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
@@ -49,7 +50,7 @@ class CryptoOrderFetcher:
             try:
                 response = requests.get(url, headers=headers, timeout=10)
                 if response.status_code == 401:
-                    #logging.error(f"Unauthorized request. Response content: {response.text}")
+                    logging.error(f"Unauthorized request. Response content: {response.text}")
                     break
 
                 response.raise_for_status()
@@ -73,6 +74,45 @@ class CryptoOrderFetcher:
 
         return all_orders
 
+    def filter_orders(self, orders: list, order_type: str, status: str) -> list:
+        filtered_orders = []
+        for order in orders:
+            if order['side'] == order_type and order['state'] == status:
+                filtered_orders.append(order)
+        return filtered_orders
+
+    def print_orders(self, orders: list):
+        counts = self.count_orders(orders)
+
+        for order in orders:
+            if order['state'] != 'canceled':
+                limit_price = order.get('limit_order_config', {}).get('limit_price', 'N/A')
+                
+                if order.get('side') == 'buy':
+                    # For buy orders, get the quote_amount
+                    asset_value = order.get('limit_order_config', {}).get('quote_amount', 'N/A')
+                elif order.get('side') == 'sell':
+                    # For sell orders, get the asset_quantity
+                    asset_value = order.get('limit_order_config', {}).get('asset_quantity', 'N/A')
+                
+                print(f"Order ID: {order.get('id')}")
+                print(f"Symbol: {order.get('symbol')}")
+                print(f"Side: {order.get('side')}")
+                print(f"Type: {order.get('type')}")
+                print(f"State: {order.get('state')}")
+                print(f"Created At: {order.get('created_at')}")
+                print(f"Updated At: {order.get('updated_at')}")
+                print(f"Asset Value: {asset_value}")  # Print the asset value (either quote_amount or asset_quantity)
+                print(f"Limit Price: ${limit_price}")
+                print('-' * 40)
+
+
+
+        print(f"Total Open Buy Orders: {counts['open_buy']}")
+        print(f"Total Open Sell Orders: {counts['open_sell']}")
+        print(f"Total Filled Buy Orders: {counts['filled_buy']}")
+        print(f"Total Filled Sell Orders: {counts['filled_sell']}")
+
     def count_orders(self, orders: list) -> dict:
         """Count total open and filled buy and sell orders."""
         counts = {'open_buy': 0, 'open_sell': 0, 'filled_buy': 0, 'filled_sell': 0}
@@ -90,28 +130,14 @@ class CryptoOrderFetcher:
 
         return counts
 
-    def print_orders(self, orders: list):
-        counts = self.count_orders(orders)
-
-        for order in orders:
-            if order['state'] != 'canceled':
-                limit_price = order.get('limit_order_config', {}).get('limit_price', 'N/A')
-                print(f"Order ID: {order.get('id')}")
-                print(f"Symbol: {order.get('symbol')}")
-                print(f"Side: {order.get('side')}")
-                print(f"Type: {order.get('type')}")
-                print(f"State: {order.get('state')}")
-                print(f"Created At: {order.get('created_at')}")
-                print(f"Updated At: {order.get('updated_at')}")
-                print(f"Limit Price: ${limit_price}")
-                print('-' * 40)
-
-        print(f"Total Open Buy Orders: {counts['open_buy']}")
-        print(f"Total Open Sell Orders: {counts['open_sell']}")
-        print(f"Total Filled Buy Orders: {counts['filled_buy']}")
-        print(f"Total Filled Sell Orders: {counts['filled_sell']}")
-
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Fetch and filter crypto orders.")
+    parser.add_argument("--type", choices=["buy", "sell"], required=True, help="Type of the order (buy or sell).")
+    parser.add_argument("--status", choices=["filled", "open"], required=True, help="Status of the order (filled or open).")
+
+    args = parser.parse_args()
+
     fetcher = CryptoOrderFetcher()
     all_orders = fetcher.get_all_orders()
-    fetcher.print_orders(all_orders)
+    filtered_orders = fetcher.filter_orders(all_orders, args.type, args.status)
+    fetcher.print_orders(filtered_orders)
